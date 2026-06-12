@@ -1,9 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
-import { VahanaCryptoSdk, VahanaCryptoSdkV2 } from 'vahana-crypto-sdk'
+import { VahanaCryptoSdk } from 'vahana-crypto-sdk'
 import type { FrontendSdkConfig, Payload } from 'vahana-crypto-sdk'
 
 const BACKEND = 'http://localhost:8000'
 const SERVER_PUBLIC_KEY = import.meta.env.VITE_SERVER_PUBLIC_KEY?.replace(/\\n/g, '\n') ?? ''
+
+const C = {
+  sdk:       '#a78bfa',
+  handshake: '#fb923c',
+  api:       '#fbbf24',
+  stream:    '#f472b6',
+  req:       '#38bdf8',
+  res:       '#4ade80',
+  dim:       '#94a3b8',
+} as const
+
+function sdkLog(method: string, endpoint: string, req: unknown, res: unknown) {
+  console.groupCollapsed(
+    '%c[Vahana SDK] %c%s %s',
+    `color:${C.sdk};font-weight:bold`,
+    `color:${C.api}`,
+    method,
+    endpoint,
+  )
+  console.log('%c→', `color:${C.req}`, req)
+  console.log('%c←', `color:${C.res}`, res)
+  console.groupEnd()
+}
 
 type Protocol = 'T1' | 'T2'
 type SessionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
@@ -514,26 +537,6 @@ function PdfGalleryCard({
   )
 }
 
-// ── SDK console logger ────────────────────────────────────────────────────────
-
-// Mid-saturation "400-level" colors — visible on both light and dark DevTools backgrounds.
-const C = {
-  sdk:       'color:#a78bfa;font-weight:normal',   // violet  — "[Vahana SDK]" prefix
-  handshake: 'color:#fb923c;font-weight:bold',     // orange  — handshake label
-  api:       'color:#fbbf24;font-weight:bold',     // amber   — api call label
-  stream:    'color:#f472b6;font-weight:bold',     // pink    — stream label
-  req:       'color:#38bdf8;font-weight:normal',   // sky     — request arrow + data
-  res:       'color:#4ade80;font-weight:normal',   // green   — response arrow + data
-  dim:       'color:#94a3b8;font-weight:normal',   // slate   — metadata labels
-}
-
-function sdkLog(method: string, endpoint: string, req: unknown, res: unknown) {
-  console.groupCollapsed(`%c[Vahana SDK] %c${method} ${endpoint}`, C.sdk, C.api)
-  console.log('%c  request  →', C.req, req)
-  console.log('%c  response ←', C.res, res)
-  console.groupEnd()
-}
-
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -541,18 +544,48 @@ export default function App() {
   const [status, setStatus]       = useState<SessionStatus>('disconnected')
   const [sessionId, setSessionId] = useState('')
   const [statusMsg, setStatusMsg] = useState('')
-  const sdkRef = useRef<VahanaCryptoSdk | VahanaCryptoSdkV2 | null>(null)
+  const sdkRef       = useRef<VahanaCryptoSdk | null>(null)
+  const pendingHsLog = useRef<{ url: string; req: unknown; res: unknown } | null>(null)
 
   useEffect(() => { connect(protocol) }, [protocol])
+
+  function logHandshakeIfPending(cryptoSessionId: string) {
+    if (!pendingHsLog.current) return
+    const hs = pendingHsLog.current
+    pendingHsLog.current = null
+    setSessionId(cryptoSessionId)
+
+    const hm = sdkRef.current?.handshakeManager
+    const isT1 = protocol === 'T1'
+
+    console.groupCollapsed(
+      '%c[Vahana SDK] %chandshake %s',
+      `color:${C.sdk};font-weight:bold`,
+      `color:${C.handshake}`,
+      hs.url,
+    )
+    console.log('%c→ wire req',       `color:${C.req}`, hs.req)
+    console.log('%c→ decrypted req',  `color:${C.req}`, hm?.lastReqPayload ?? '—')
+    console.log('%c← wire res',       `color:${C.res}`, hs.res)
+    console.log('%c← decrypted res',  `color:${C.res}`, hm?.lastRespPayload ?? '—')
+    if (isT1) {
+      console.log('%ctxnKey',   `color:${C.dim}`, 'generated per-session (RSA-encrypted in transit)')
+    } else {
+      console.log('%ctxnKeyS',  `color:${C.dim}`, (hm as any)?.txnKeyS ?? '—')
+    }
+    console.log('%csessionId', `color:${C.dim}`, cryptoSessionId)
+    console.groupEnd()
+  }
 
   function connect(proto: Protocol) {
     setStatus('connected')
     setSessionId('')
     setStatusMsg('')
+    pendingHsLog.current = null
 
     if (!SERVER_PUBLIC_KEY) {
       setStatus('error')
-      setStatusMsg('VITE_SERVER_PUBLIC_KEY is not set. Check .env in demo-app/frontend.')
+      setStatusMsg('VITE_SERVER_PUBLIC_KEY is not set. Check .env in frontend.')
       return
     }
 
@@ -562,70 +595,59 @@ export default function App() {
       publicKey: SERVER_PUBLIC_KEY,
       txnKeyName: 'txnKey',
       payloadKeyName: 'payload',
+      version: proto.toLowerCase() as 't1' | 't2',
     }
 
-    // Intercept fetch for the handshake request/response before the SDK fires it.
     const handshakeUrl = config.baseUri + config.handshakeEndpoint
-    const origFetch = window.fetch
-    let wireReq: unknown = null
-    let wireResp: unknown = null
+    const origFetch = window.fetch.bind(window)
 
-    window.fetch = async (input, init?, ...rest: unknown[]) => {
-      const url = typeof input === 'string' ? input
-        : input instanceof URL ? input.href
-        : (input as Request).url
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
       if (url === handshakeUrl) {
-        wireReq = init?.body ? JSON.parse(init.body as string) : null
-        const resp = await origFetch(input, init)
-        const clone = resp.clone()
-        wireResp = await clone.json()
         window.fetch = origFetch
-        return resp
+        const req = init?.body ? JSON.parse(init.body as string) : null
+        const response = await origFetch(input, init)
+        const res = await response.clone().json()
+        pendingHsLog.current = { url: handshakeUrl, req, res }
+        return response
       }
       return origFetch(input, init)
     }
 
-    const sdk = proto === 'T1' ? new VahanaCryptoSdk(config) : new VahanaCryptoSdkV2(config)
+    const sdk = new VahanaCryptoSdk(config)
     sdkRef.current = sdk
 
-    sdk.ensureHandshake().then(sessionId => {
-      setSessionId(sessionId)
-      console.groupCollapsed(`%c[Vahana SDK] %chandshake  %c${proto}`, C.sdk, C.handshake, C.dim)
-      console.log('%c  endpoint  ', C.dim, handshakeUrl)
-      console.log('%c  request  →', C.req, wireReq)
-      console.log('%c  response ←', C.res, wireResp)
-      console.log('%c  sessionId ', C.dim, sessionId)
-      console.groupEnd()
-    }).catch(err => {
-      window.fetch = origFetch
-      setStatus('error')
-      setStatusMsg(String(err))
-    })
+    console.groupCollapsed(
+      '%c[Vahana SDK] %cnew VahanaCryptoSdk',
+      `color:${C.sdk};font-weight:bold`,
+      `color:${C.api}`,
+    )
+    console.log('%cpublicKey',         `color:${C.dim}`, config.publicKey.slice(0, 64) + '…')
+    console.log('%cbaseUri',           `color:${C.dim}`, config.baseUri)
+    console.log('%ctxnKeyName',        `color:${C.dim}`, config.txnKeyName)
+    console.log('%chandshakeEndpoint', `color:${C.dim}`, config.handshakeEndpoint)
+    console.log('%cversion',           `color:${C.dim}`, proto)
+    console.groupEnd()
   }
 
   async function encryptedCall(endpoint: string, data: Record<string, unknown>): Promise<unknown> {
     const sdk = sdkRef.current
     if (!sdk) throw new Error('Not connected — wait for handshake')
 
-    const encReq = await sdk.doEncryption([{ type: 'STRING', value: JSON.stringify(data) }])
-    let backendReq = JSON.parse(JSON.stringify(encReq))
-    backendReq.encPayloads = backendReq.encPayloads.map((p: Payload) => ({
-      value: p.value,
-    }))
+    const payloads = [{ type: 'STRING' as const, value: JSON.stringify(data) }]
+    const encReq = await sdk.doEncryption(payloads)
+    logHandshakeIfPending(encReq.cryptoSessionId)
+    const backendReq = JSON.parse(JSON.stringify(encReq))
+    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(encReq),
+      body: JSON.stringify(backendReq),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`)
 
     const encResp = await resp.json()
-    let decrypted: Payload[]
-    if (protocol === 'T1') {
-      decrypted = await (sdk as VahanaCryptoSdk).doDecryption(encResp.encPayloads, encResp.encTxnKey)
-    } else {
-      decrypted = await (sdk as VahanaCryptoSdkV2).doDecryption(encResp.encPayloads)
-    }
+    const decrypted = await sdk.doDecryption(encResp.encPayloads, encResp.encTxnKey)
     const result = JSON.parse(decrypted[0].value as string)
     sdkLog('POST', endpoint, data, result)
     return result
@@ -636,27 +658,25 @@ export default function App() {
     if (!sdk) throw new Error('Not connected — wait for handshake')
 
     const arrayBuffer = await file.arrayBuffer()
-    const encReq = await sdk.doEncryption([
-      { type: 'STRING', value: file.name },
-      { type: 'BINARY',  value: arrayBuffer },
-    ])
-
+    const payloads = [
+      { type: 'STRING' as const, value: file.name },
+      { type: 'BINARY' as const, value: arrayBuffer },
+    ]
+    const encReq = await sdk.doEncryption(payloads)
+    logHandshakeIfPending(encReq.cryptoSessionId)
+    const backendReq = JSON.parse(JSON.stringify(encReq))
+    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/content/pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(encReq),
+      body: JSON.stringify(backendReq),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`)
 
     const encResp = await resp.json()
-    let decrypted: Payload[]
-    if (protocol === 'T1') {
-      decrypted = await (sdk as VahanaCryptoSdk).doDecryption(encResp.encPayloads, encResp.encTxnKey)
-    } else {
-      decrypted = await (sdk as VahanaCryptoSdkV2).doDecryption(encResp.encPayloads)
-    }
+    const decrypted = await sdk.doDecryption(encResp.encPayloads, encResp.encTxnKey)
     const result = JSON.parse(decrypted[0].value as string)
-    sdkLog('POST', '/content/pdf', { filename: file.name, size: file.size }, result)
+    sdkLog('POST', '/content/pdf', { filename: file.name, bytes: file.size }, result)
     if (!result.success) throw new Error(result.error ?? 'Upload failed')
   }
 
@@ -669,23 +689,25 @@ export default function App() {
     const sdk = sdkRef.current
     if (!sdk) throw new Error('Not connected — wait for handshake')
 
-    const encReq = await sdk.doEncryption([{ type: 'STRING', value: JSON.stringify({ id }) }])
+    const payloads = [{ type: 'STRING' as const, value: JSON.stringify({ id }) }]
+    const encReq = await sdk.doEncryption(payloads)
+    logHandshakeIfPending(encReq.cryptoSessionId)
+    const backendReq = JSON.parse(JSON.stringify(encReq))
+    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/pdfs/download`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(encReq),
+      body: JSON.stringify(backendReq),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`)
 
     const encResp = await resp.json()
-    let decrypted: Payload[]
-    if (protocol === 'T1') {
-      decrypted = await (sdk as VahanaCryptoSdk).doDecryption(encResp.encPayloads, encResp.encTxnKey)
-    } else {
-      decrypted = await (sdk as VahanaCryptoSdkV2).doDecryption(encResp.encPayloads)
-    }
+    const decrypted = await sdk.doDecryption(encResp.encPayloads, encResp.encTxnKey)
     const result = JSON.parse(decrypted[0].value as string)
-    sdkLog('POST', '/pdfs/download', { id }, { ...result, data: result.data ? `<binary ${result.size} bytes>` : undefined })
+    const loggedResult = result.data
+      ? { ...result, data: `<binary ${Math.round((result.data as string).length * 3 / 4)} bytes>` }
+      : result
+    sdkLog('POST', '/pdfs/download', { id }, loggedResult)
     if (!result.success) throw new Error(result.error ?? 'Download failed')
 
     // Base64 → Uint8Array → Blob → anchor download
@@ -709,14 +731,22 @@ export default function App() {
     const sdk = sdkRef.current
     if (!sdk) throw new Error('Not connected')
 
-    const encReq = await sdk.doEncryption([
-      { type: 'STRING', value: JSON.stringify({ message, repeatCount }) },
-    ])
-    console.log('%c[Vahana SDK] %cPOST /stream  request →', C.sdk, C.stream, { message, repeatCount })
+    console.log(
+      '%c[Vahana SDK] %cstream →',
+      `color:${C.sdk};font-weight:bold`,
+      `color:${C.stream}`,
+      { message, repeatCount },
+    )
+
+    const payloads = [{ type: 'STRING' as const, value: JSON.stringify({ message, repeatCount }) }]
+    const encReq = await sdk.doEncryption(payloads)
+    logHandshakeIfPending(encReq.cryptoSessionId)
+    const backendReq = JSON.parse(JSON.stringify(encReq))
+    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
     const response = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(encReq),
+      body: JSON.stringify(backendReq),
     })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
@@ -737,14 +767,15 @@ export default function App() {
         if (raw === '[DONE]') return
 
         const encChunk = JSON.parse(raw)
-        let decrypted: Payload[]
-        if (protocol === 'T1') {
-          decrypted = await (sdk as VahanaCryptoSdk).doDecryption(encChunk.encPayloads, encChunk.encTxnKey)
-        } else {
-          decrypted = await (sdk as VahanaCryptoSdkV2).doDecryption(encChunk.encPayloads)
-        }
+        const decrypted: Payload[] = await sdk.doDecryption(encChunk.encPayloads, encChunk.encTxnKey)
         const chunk = JSON.parse(decrypted[0].value as string) as StreamChunk
-        console.log(`%c[Vahana SDK] %cstream chunk #${chunk.index}`, C.sdk, C.stream, chunk)
+        console.log(
+          '%c[Vahana SDK] %cstream ← #%d',
+          `color:${C.sdk};font-weight:bold`,
+          `color:${C.stream}`,
+          chunk.index,
+          chunk,
+        )
         onChunk(chunk)
       }
     }

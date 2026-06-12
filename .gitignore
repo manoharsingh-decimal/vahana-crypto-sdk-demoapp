@@ -15,3 +15,7 @@ frontend/.env
 # Keys
 backend/keys/server_private.pem
 backend/keys/server_public.pem
+
+
+# commands
+/vendor/updLib.md
