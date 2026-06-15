@@ -3,12 +3,22 @@
 import base64
 import datetime
 import json
+import logging
 import os
 import time
 import uuid
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_cors import CORS
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
+# LOG_LEVEL=INFO  (default) → all output: handshakes, requests, responses, streams
+# LOG_LEVEL=WARNING         → silent except errors
+# LOG_LEVEL=ERROR           → errors only
+
+_LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+logging.basicConfig(level=getattr(logging, _LOG_LEVEL, logging.INFO), format='%(message)s')
+logger = logging.getLogger('vahana')
 
 from vahana_crypto import InMemoryCryptoSessionStore, VahanaCryptoSdk, VahanaCryptoSdkV2
 
@@ -78,10 +88,9 @@ class LoggingSessionStore(InMemoryCryptoSessionStore):
 t1_sdk = VahanaCryptoSdk(SERVER_PRIV, LoggingSessionStore("T1"))
 t2_sdk = VahanaCryptoSdkV2(SERVER_PRIV, LoggingSessionStore("T2"))
 
-print(
+logger.info(
     f'\n{_GRN}{_BOLD}✓  Loaded server keypair — demo server ready{_RST}\n'
-    f'   {_DIM}T1 (RSA per-request)  ·  T2 (AES shared session){_RST}\n',
-    flush=True,
+    f'   {_DIM}T1 (RSA per-request)  ·  T2 (AES shared session){_RST}\n'
 )
 
 
@@ -92,20 +101,17 @@ _sessions: dict = {}
 
 def _session_open(session_id: str, proto: str) -> None:
     _sessions[session_id] = {'proto': proto, 't0': time.monotonic()}
-    print(
+    logger.info(
         f'┌─ {_tag(proto)} {_BOLD}handshake{_RST}'
-        f'  {_DIM}{_now()}  ·  {session_id[:8]}…{_RST}',
-        flush=True,
+        f'  {_DIM}{_now()}  ·  {session_id[:8]}…{_RST}'
     )
 
 
 def _session_established(session_id: str) -> None:
-    proto = _sessions.get(session_id, {}).get('proto', '??')
     elapsed = (time.monotonic() - _sessions[session_id]['t0']) * 1000
-    print(
+    logger.info(
         f'└─ {_GRN}{_BOLD}session established{_RST}'
-        f'  {_DIM}{elapsed:.0f}ms{_RST}\n',
-        flush=True,
+        f'  {_DIM}{elapsed:.0f}ms{_RST}\n'
     )
 
 
@@ -121,12 +127,11 @@ def _find_latest_session(proto: str) -> str:
 def _log_req(session_id: str, endpoint: str, data: dict) -> float:
     proto = _sessions.get(session_id, {}).get('proto', '??')
     method = request.method
-    print(
+    logger.info(
         f'┌─ {_tag(proto)} {_BOLD}{method} {endpoint}{_RST}'
-        f'  {_DIM}{_now()}  ·  {_short(session_id)}{_RST}',
-        flush=True,
+        f'  {_DIM}{_now()}  ·  {_short(session_id)}{_RST}'
     )
-    print(f'│  {_BLU}→{_RST}  {_trim(data)}', flush=True)
+    logger.info(f'│  {_BLU}→{_RST}  {_trim(data)}')
     return time.monotonic()
 
 
@@ -135,8 +140,9 @@ def _log_res(t0: float, result: dict) -> None:
     ok = result.get('success', True)
     arrow_clr = _GRN if ok else _RED
     status    = f'{_GRN}OK{_RST}' if ok else f'{_RED}ERR{_RST}'
-    print(f'│  {arrow_clr}←{_RST}  {_trim(result)}', flush=True)
-    print(f'└─ {status}  {_DIM}{elapsed:.0f}ms{_RST}\n', flush=True)
+    log = logger.info if ok else logger.error
+    log(f'│  {arrow_clr}←{_RST}  {_trim(result)}')
+    log(f'└─ {status}  {_DIM}{elapsed:.0f}ms{_RST}\n')
 
 
 # ── In-memory user store ──────────────────────────────────────────────────────
@@ -344,16 +350,14 @@ def _make_stream(sdk):
                 "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
             }
             enc = sdk.do_encryption([{"type": "STRING", "value": json.dumps(chunk)}], sid)
-            print(
-                f'│  {_MGN}~{_RST}  chunk {i + 1}/{repeat_count}  {_DIM}{chunk["content"][:60]}{_RST}',
-                flush=True,
+            logger.info(
+                f'│  {_MGN}~{_RST}  chunk {i + 1}/{repeat_count}  {_DIM}{chunk["content"][:60]}{_RST}'
             )
             yield f"data: {json.dumps(enc)}\n\n"
             time.sleep(0.4)
         elapsed = (time.monotonic() - t0) * 1000
-        print(
-            f'└─ {_GRN}stream done{_RST}  {_DIM}{repeat_count} chunks · {elapsed:.0f}ms{_RST}\n',
-            flush=True,
+        logger.info(
+            f'└─ {_GRN}stream done{_RST}  {_DIM}{repeat_count} chunks · {elapsed:.0f}ms{_RST}\n'
         )
         yield "data: [DONE]\n\n"
 
@@ -467,7 +471,7 @@ def t2_stream():
 @app.get("/api/users/reset")
 def reset_users():
     _seed_users()
-    print(f'{_DIM}user store reset → {len(_users)} seed users{_RST}\n', flush=True)
+    logger.info(f'{_DIM}user store reset → {len(_users)} seed users{_RST}\n')
     return jsonify({"success": True, "message": "User store reset to seed data", "count": len(_users)})
 
 
