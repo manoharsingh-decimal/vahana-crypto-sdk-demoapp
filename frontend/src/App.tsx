@@ -368,13 +368,18 @@ function StreamCard({
   }
 
   async function start() {
+    const count = Number(repeatCount)
+    if (!repeatCount.trim() || !Number.isInteger(count) || count < 1) {
+      setError('Repeat count must be a positive whole number')
+      return
+    }
     setRunning(true)
     setChunks([])
     setError('')
     try {
       await onStartStream(
         message || 'Hello from Vahana SDK',
-        Number(repeatCount) || 5,
+        count,
         chunk => setChunks(prev => [...prev, chunk]),
       )
     } catch (e) {

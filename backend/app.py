@@ -324,8 +324,13 @@ def _make_stream(sdk):
     proto = _sessions.get(sid, {}).get('proto', '??')
     ep    = _endpoint(request.path, proto)
     data  = _decrypt_body(sdk, body)
-    message     = data.get("message", "Hello")
-    repeat_count = max(1, min(int(data.get("repeatCount", 3)), 10))
+    message      = data.get("message", "Hello")
+    try:
+        repeat_count = int(data.get("repeatCount", 0))
+    except (TypeError, ValueError):
+        repeat_count = 0
+    if repeat_count < 1:
+        return jsonify({"error": f"repeatCount must be a positive integer, got {repeat_count}"}), 400
 
     t0 = _log_req(sid, ep, data)
 
