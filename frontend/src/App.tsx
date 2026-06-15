@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { VahanaCryptoSdk } from 'vahana-crypto-sdk'
+import { VahanaCryptoSdk, VahanaCryptoSdkV2 } from 'vahana-crypto-sdk'
 import type { FrontendSdkConfig, Payload } from 'vahana-crypto-sdk'
+
+type AnyVahanaSdk = VahanaCryptoSdk | VahanaCryptoSdkV2
 
 const BACKEND = 'http://localhost:8000'
 const SERVER_PUBLIC_KEY = import.meta.env.VITE_SERVER_PUBLIC_KEY?.replace(/\\n/g, '\n') ?? ''
@@ -548,7 +550,7 @@ export default function App() {
   const [status, setStatus]       = useState<SessionStatus>('disconnected')
   const [sessionId, setSessionId] = useState('')
   const [statusMsg, setStatusMsg] = useState('')
-  const sdkRef = useRef<VahanaCryptoSdk | null>(null)
+  const sdkRef = useRef<AnyVahanaSdk | null>(null)
 
   useEffect(() => { connect(protocol) }, [protocol])
 
@@ -569,10 +571,9 @@ export default function App() {
       publicKey: SERVER_PUBLIC_KEY,
       txnKeyName: 'txnKey',
       payloadKeyName: 'payload',
-      version: proto.toLowerCase() as 't1' | 't2',
     }
 
-    const sdk = new VahanaCryptoSdk(config)
+    const sdk = proto === 'T2' ? new VahanaCryptoSdkV2(config) : new VahanaCryptoSdk(config)
     sdkRef.current = sdk
 
     console.groupCollapsed(
@@ -586,6 +587,12 @@ export default function App() {
     console.log('%chandshakeEndpoint', `color:${C.dim}`, config.handshakeEndpoint)
     console.log('%cversion',           `color:${C.dim}`, proto)
     console.groupEnd()
+  }
+
+  async function callDoDecryption(encPayloads: any[], encTxnKey?: string): Promise<Payload[]> {
+    const sdk = sdkRef.current!
+    if (sdk instanceof VahanaCryptoSdkV2) return sdk.doDecryption(encPayloads)
+    return (sdk as VahanaCryptoSdk).doDecryption(encPayloads, encTxnKey!)
   }
 
   async function encryptedCall(endpoint: string, data: Record<string, unknown>): Promise<unknown> {
@@ -605,7 +612,7 @@ export default function App() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`)
 
     const encResp = await resp.json()
-    const decrypted = await sdk.doDecryption(encResp.encPayloads, encResp.encTxnKey)
+    const decrypted = await callDoDecryption(encResp.encPayloads, encResp.encTxnKey)
     const result = JSON.parse(decrypted[0].value as string)
     sdkLog('POST', endpoint, data, result)
     return result
@@ -632,7 +639,7 @@ export default function App() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`)
 
     const encResp = await resp.json()
-    const decrypted = await sdk.doDecryption(encResp.encPayloads, encResp.encTxnKey)
+    const decrypted = await callDoDecryption(encResp.encPayloads, encResp.encTxnKey)
     const result = JSON.parse(decrypted[0].value as string)
     sdkLog('POST', '/content/pdf', { filename: file.name, bytes: file.size }, result)
     if (!result.success) throw new Error(result.error ?? 'Upload failed')
@@ -660,7 +667,7 @@ export default function App() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`)
 
     const encResp = await resp.json()
-    const decrypted = await sdk.doDecryption(encResp.encPayloads, encResp.encTxnKey)
+    const decrypted = await callDoDecryption(encResp.encPayloads, encResp.encTxnKey)
     const result = JSON.parse(decrypted[0].value as string)
     const loggedResult = result.data
       ? { ...result, data: `<binary ${Math.round((result.data as string).length * 3 / 4)} bytes>` }
@@ -725,7 +732,7 @@ export default function App() {
         if (raw === '[DONE]') return
 
         const encChunk = JSON.parse(raw)
-        const decrypted: Payload[] = await sdk.doDecryption(encChunk.encPayloads, encChunk.encTxnKey)
+        const decrypted: Payload[] = await callDoDecryption(encChunk.encPayloads, encChunk.encTxnKey)
         const chunk = JSON.parse(decrypted[0].value as string) as StreamChunk
         console.log(
           '%c[Vahana SDK] %cstream ← #%d',
