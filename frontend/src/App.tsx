@@ -22,8 +22,8 @@ function sdkLog(method: string, endpoint: string, req: unknown, res: unknown) {
     method,
     endpoint,
   )
-  console.log('%c→', `color:${C.req}`, req)
-  console.log('%c←', `color:${C.res}`, res)
+  console.log('%c→ %creq', `color:${C.req}`, `color:${C.dim}`, req)
+  console.log('%c← %cres', `color:${C.res}`, `color:${C.dim}`, res)
   console.groupEnd()
 }
 
