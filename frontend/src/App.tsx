@@ -6,13 +6,12 @@ const BACKEND = 'http://localhost:8000'
 const SERVER_PUBLIC_KEY = import.meta.env.VITE_SERVER_PUBLIC_KEY?.replace(/\\n/g, '\n') ?? ''
 
 const C = {
-  sdk:       '#a78bfa',
-  handshake: '#fb923c',
-  api:       '#fbbf24',
-  stream:    '#f472b6',
-  req:       '#38bdf8',
-  res:       '#4ade80',
-  dim:       '#94a3b8',
+  sdk:    '#a78bfa',
+  api:    '#fbbf24',
+  stream: '#f472b6',
+  req:    '#38bdf8',
+  res:    '#4ade80',
+  dim:    '#94a3b8',
 } as const
 
 function sdkLog(method: string, endpoint: string, req: unknown, res: unknown) {
@@ -549,44 +548,14 @@ export default function App() {
   const [status, setStatus]       = useState<SessionStatus>('disconnected')
   const [sessionId, setSessionId] = useState('')
   const [statusMsg, setStatusMsg] = useState('')
-  const sdkRef       = useRef<VahanaCryptoSdk | null>(null)
-  const pendingHsLog = useRef<{ url: string; req: unknown; res: unknown } | null>(null)
+  const sdkRef = useRef<VahanaCryptoSdk | null>(null)
 
   useEffect(() => { connect(protocol) }, [protocol])
-
-  function logHandshakeIfPending(cryptoSessionId: string) {
-    if (!pendingHsLog.current) return
-    const hs = pendingHsLog.current
-    pendingHsLog.current = null
-    setSessionId(cryptoSessionId)
-
-    const hm = sdkRef.current?.handshakeManager
-    const isT1 = protocol === 'T1'
-
-    console.groupCollapsed(
-      '%c[Vahana SDK] %chandshake %s',
-      `color:${C.sdk};font-weight:bold`,
-      `color:${C.handshake}`,
-      hs.url,
-    )
-    console.log('%c→ wire req',       `color:${C.req}`, hs.req)
-    console.log('%c→ decrypted req',  `color:${C.req}`, hm?.lastReqPayload ?? '—')
-    console.log('%c← wire res',       `color:${C.res}`, hs.res)
-    console.log('%c← decrypted res',  `color:${C.res}`, hm?.lastRespPayload ?? '—')
-    if (isT1) {
-      console.log('%ctxnKey',   `color:${C.dim}`, 'generated per-session (RSA-encrypted in transit)')
-    } else {
-      console.log('%ctxnKeyS',  `color:${C.dim}`, (hm as any)?.txnKeyS ?? '—')
-    }
-    console.log('%csessionId', `color:${C.dim}`, cryptoSessionId)
-    console.groupEnd()
-  }
 
   function connect(proto: Protocol) {
     setStatus('connected')
     setSessionId('')
     setStatusMsg('')
-    pendingHsLog.current = null
 
     if (!SERVER_PUBLIC_KEY) {
       setStatus('error')
@@ -601,22 +570,6 @@ export default function App() {
       txnKeyName: 'txnKey',
       payloadKeyName: 'payload',
       version: proto.toLowerCase() as 't1' | 't2',
-    }
-
-    const handshakeUrl = config.baseUri + config.handshakeEndpoint
-    const origFetch = window.fetch.bind(window)
-
-    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
-      if (url === handshakeUrl) {
-        window.fetch = origFetch
-        const req = init?.body ? JSON.parse(init.body as string) : null
-        const response = await origFetch(input, init)
-        const res = await response.clone().json()
-        pendingHsLog.current = { url: handshakeUrl, req, res }
-        return response
-      }
-      return origFetch(input, init)
     }
 
     const sdk = new VahanaCryptoSdk(config)
@@ -641,7 +594,7 @@ export default function App() {
 
     const payloads = [{ type: 'STRING' as const, value: JSON.stringify(data) }]
     const encReq = await sdk.doEncryption(payloads)
-    logHandshakeIfPending(encReq.cryptoSessionId)
+    setSessionId(encReq.cryptoSessionId)
     const backendReq = JSON.parse(JSON.stringify(encReq))
     backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}${endpoint}`, {
@@ -668,7 +621,7 @@ export default function App() {
       { type: 'BINARY' as const, value: arrayBuffer },
     ]
     const encReq = await sdk.doEncryption(payloads)
-    logHandshakeIfPending(encReq.cryptoSessionId)
+    setSessionId(encReq.cryptoSessionId)
     const backendReq = JSON.parse(JSON.stringify(encReq))
     backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/content/pdf`, {
@@ -696,7 +649,7 @@ export default function App() {
 
     const payloads = [{ type: 'STRING' as const, value: JSON.stringify({ id }) }]
     const encReq = await sdk.doEncryption(payloads)
-    logHandshakeIfPending(encReq.cryptoSessionId)
+    setSessionId(encReq.cryptoSessionId)
     const backendReq = JSON.parse(JSON.stringify(encReq))
     backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/pdfs/download`, {
@@ -745,7 +698,7 @@ export default function App() {
 
     const payloads = [{ type: 'STRING' as const, value: JSON.stringify({ message, repeatCount }) }]
     const encReq = await sdk.doEncryption(payloads)
-    logHandshakeIfPending(encReq.cryptoSessionId)
+    setSessionId(encReq.cryptoSessionId)
     const backendReq = JSON.parse(JSON.stringify(encReq))
     backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
     const response = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/stream`, {
