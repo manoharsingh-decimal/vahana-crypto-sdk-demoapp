@@ -27,10 +27,43 @@ if not os.path.exists(_PRIV_PATH):
 with open(_PRIV_PATH) as f:
     SERVER_PRIV = f.read()
 
-print("✓   Loaded server keypair. Starting demo server.\n", flush=True)
+
+# ── ANSI colours ──────────────────────────────────────────────────────────────
+
+_RST  = '\033[0m'
+_BOLD = '\033[1m'
+_DIM  = '\033[2m'
+_RED  = '\033[91m'
+_GRN  = '\033[92m'
+_YLW  = '\033[93m'
+_BLU  = '\033[94m'
+_MGN  = '\033[95m'
+_CYN  = '\033[96m'
+
+_PROTO_CLR = {'T1': _CYN, 'T2': _YLW}
+
+def _tag(proto: str) -> str:
+    c = _PROTO_CLR.get(proto, _RST)
+    return f'{c}{_BOLD}[{proto}]{_RST}'
+
+def _now() -> str:
+    return datetime.datetime.utcnow().strftime('%H:%M:%S')
+
+def _short(session_id: str) -> str:
+    return f'{_DIM}{session_id[:8]}…{_RST}'
+
+def _trim(obj, max_len: int = 200) -> str:
+    """Compact JSON, capping at max_len chars."""
+    s = json.dumps(obj, separators=(',', ':'), default=str)
+    return s if len(s) <= max_len else s[:max_len] + f'{_DIM}…{_RST}'
+
+def _endpoint(path: str, proto: str) -> str:
+    """Strip /api/t1 or /api/t2 prefix from path."""
+    prefix = f'/api/{proto.lower()}'
+    return path[len(prefix):] if path.startswith(prefix) else path
 
 
-# ─── Session-aware store ──────────────────────────────────────────────
+# ── Session-aware store ───────────────────────────────────────────────────────
 
 class LoggingSessionStore(InMemoryCryptoSessionStore):
     def __init__(self, proto: str):
@@ -39,40 +72,74 @@ class LoggingSessionStore(InMemoryCryptoSessionStore):
 
     def set(self, session_id: str, data: dict) -> None:
         super().set(session_id, data)
-        _open_session(session_id, self._proto)
+        _session_open(session_id, self._proto)
 
 
 t1_sdk = VahanaCryptoSdk(SERVER_PRIV, LoggingSessionStore("T1"))
 t2_sdk = VahanaCryptoSdkV2(SERVER_PRIV, LoggingSessionStore("T2"))
 
+print(
+    f'\n{_GRN}{_BOLD}✓  Loaded server keypair — demo server ready{_RST}\n'
+    f'   {_DIM}T1 (RSA per-request)  ·  T2 (AES shared session){_RST}\n',
+    flush=True,
+)
 
-# ─── Session log helpers ──────────────────────────────────────────────
+
+# ── Session registry ──────────────────────────────────────────────────────────
 
 _sessions: dict = {}
 
 
-def _now() -> str:
-    return datetime.datetime.utcnow().strftime("%H:%M:%S UTC")
+def _session_open(session_id: str, proto: str) -> None:
+    _sessions[session_id] = {'proto': proto, 't0': time.monotonic()}
+    print(
+        f'┌─ {_tag(proto)} {_BOLD}handshake{_RST}'
+        f'  {_DIM}{_now()}  ·  {session_id[:8]}…{_RST}',
+        flush=True,
+    )
 
 
-def _open_session(session_id: str, proto: str) -> None:
-    _sessions[session_id] = {"proto": proto, "start": _now()}
-    print(f"┌─ [{proto}] session started · {_sessions[session_id]['start']}", flush=True)
-
-
-def _log(session_id: str, msg: str) -> None:
-    proto = _sessions.get(session_id, {}).get("proto", "??")
-    print(f"│  [{proto}] {msg}", flush=True)
+def _session_established(session_id: str) -> None:
+    proto = _sessions.get(session_id, {}).get('proto', '??')
+    elapsed = (time.monotonic() - _sessions[session_id]['t0']) * 1000
+    print(
+        f'└─ {_GRN}{_BOLD}session established{_RST}'
+        f'  {_DIM}{elapsed:.0f}ms{_RST}\n',
+        flush=True,
+    )
 
 
 def _find_latest_session(proto: str) -> str:
     for sid in reversed(list(_sessions.keys())):
-        if _sessions[sid]["proto"] == proto:
+        if _sessions[sid]['proto'] == proto:
             return sid
-    return ""
+    return ''
 
 
-# ─── In-memory user store ─────────────────────────────────────────────
+# ── Request / response logging ────────────────────────────────────────────────
+
+def _log_req(session_id: str, endpoint: str, data: dict) -> float:
+    proto = _sessions.get(session_id, {}).get('proto', '??')
+    method = request.method
+    print(
+        f'┌─ {_tag(proto)} {_BOLD}{method} {endpoint}{_RST}'
+        f'  {_DIM}{_now()}  ·  {_short(session_id)}{_RST}',
+        flush=True,
+    )
+    print(f'│  {_BLU}→{_RST}  {_trim(data)}', flush=True)
+    return time.monotonic()
+
+
+def _log_res(t0: float, result: dict) -> None:
+    elapsed = (time.monotonic() - t0) * 1000
+    ok = result.get('success', True)
+    arrow_clr = _GRN if ok else _RED
+    status    = f'{_GRN}OK{_RST}' if ok else f'{_RED}ERR{_RST}'
+    print(f'│  {arrow_clr}←{_RST}  {_trim(result)}', flush=True)
+    print(f'└─ {status}  {_DIM}{elapsed:.0f}ms{_RST}\n', flush=True)
+
+
+# ── In-memory user store ──────────────────────────────────────────────────────
 
 _users: dict = {}
 
@@ -92,7 +159,7 @@ def _seed_users() -> None:
 _seed_users()
 
 
-# ─── Encrypted request helpers ────────────────────────────────────────
+# ── Encrypted request helpers ─────────────────────────────────────────────────
 
 def _decrypt_body(sdk, body: dict) -> dict:
     sid = body["cryptoSessionId"]
@@ -110,23 +177,27 @@ def _encrypt_response(sdk, session_id: str, result: dict):
 
 def _handle(sdk, handler_fn):
     body = request.get_json()
-    sid = body["cryptoSessionId"]
+    sid  = body["cryptoSessionId"]
+    proto = _sessions.get(sid, {}).get('proto', '??')
+    ep   = _endpoint(request.path, proto)
     data = _decrypt_body(sdk, body)
-    _log(sid, f"decrypted → {json.dumps(data)}")
+    t0   = _log_req(sid, ep, data)
     result = handler_fn(data)
-    _log(sid, f"response  ← {json.dumps(result)}")
+    _log_res(t0, result)
     return _encrypt_response(sdk, sid, result)
 
 
-# ─── In-memory PDF store ──────────────────────────────────────────────
+# ── In-memory PDF store ───────────────────────────────────────────────────────
 
 _pdfs: dict = {}
 
 
 def _handle_pdf(sdk):
-    """Upload handler: expects [STRING filename, BINARY pdf_bytes]."""
     body = request.get_json()
-    sid = body["cryptoSessionId"]
+    sid  = body["cryptoSessionId"]
+    proto = _sessions.get(sid, {}).get('proto', '??')
+    ep   = _endpoint(request.path, proto)
+
     if isinstance(sdk, VahanaCryptoSdk):
         decrypted = sdk.do_decryption(body["encPayloads"], sid, body["encTxnKey"])
     else:
@@ -134,26 +205,22 @@ def _handle_pdf(sdk):
 
     filename  = decrypted[0]["value"] if len(decrypted) > 1 else "upload.pdf"
     pdf_bytes = decrypted[1]["value"] if len(decrypted) > 1 else (decrypted[0]["value"] if decrypted else b"")
-    size = len(pdf_bytes)
+    size      = len(pdf_bytes)
 
     pdf_id = str(uuid.uuid4())[:8]
     _pdfs[pdf_id] = {
-        "id": pdf_id,
-        "filename": filename,
-        "size": size,
+        "id": pdf_id, "filename": filename, "size": size,
         "data": pdf_bytes,
         "uploadedAt": datetime.datetime.utcnow().isoformat() + "Z",
     }
-    _log(sid, f"PDF stored — id={pdf_id} filename={filename} size={size:,} bytes")
 
+    t0 = _log_req(sid, ep, {"filename": filename, "size": f"{size:,} bytes"})
     result = {
-        "success": True,
-        "id": pdf_id,
-        "filename": filename,
+        "success": True, "id": pdf_id, "filename": filename,
         "receivedBytes": size,
         "timestamp": _pdfs[pdf_id]["uploadedAt"],
     }
-    _log(sid, f"response  ← {json.dumps(result)}")
+    _log_res(t0, result)
     return _encrypt_response(sdk, sid, result)
 
 
@@ -171,15 +238,13 @@ def _pdf_download(data: dict) -> dict:
         return {"success": False, "error": f"PDF '{pdf_id}' not found"}
     p = _pdfs[pdf_id]
     return {
-        "success": True,
-        "id": p["id"],
-        "filename": p["filename"],
+        "success": True, "id": p["id"], "filename": p["filename"],
         "size": p["size"],
         "data": base64.b64encode(p["data"]).decode(),
     }
 
 
-# ─── User operation handlers ──────────────────────────────────────────
+# ── User operation handlers ───────────────────────────────────────────────────
 
 def _safe(user: dict) -> dict:
     return {k: v for k, v in user.items() if k != "password"}
@@ -191,10 +256,8 @@ def _user_create(data: dict) -> dict:
         return {"success": False, "error": "Password is required"}
     user_id = (data.get("id") or f"USR{str(uuid.uuid4())[:6].upper()}").strip()
     user = {
-        "id": user_id,
-        "name": data.get("name", ""),
-        "email": data.get("email", ""),
-        "role": data.get("role", "User"),
+        "id": user_id, "name": data.get("name", ""),
+        "email": data.get("email", ""), "role": data.get("role", "User"),
         "password": password,
     }
     _users[user_id] = user
@@ -207,15 +270,12 @@ _ADMIN_PASSWORD = "admin"
 def _user_fetch(data: dict) -> dict:
     user_id  = (data.get("id") or "").strip()
     password = (data.get("password") or "").strip()
-
     if not password:
         return {"success": False, "error": "Password is required"}
-
     if not user_id:
         if password != _ADMIN_PASSWORD:
             return {"success": False, "error": "Incorrect admin password"}
         return {"success": True, "operation": "LIST", "users": [_safe(u) for u in _users.values()], "count": len(_users)}
-
     user = _users.get(user_id)
     if not user:
         return {"success": False, "error": f"User '{user_id}' not found"}
@@ -256,27 +316,40 @@ def _user_delete(data: dict) -> dict:
 _STREAM_TYPES = ["text", "image", "text", "data", "text"]
 
 
-# ─── Streaming handler ────────────────────────────────────────────────
+# ── Streaming handler ─────────────────────────────────────────────────────────
 
 def _make_stream(sdk):
-    body = request.get_json()
-    data = _decrypt_body(sdk, body)
-    sid = body["cryptoSessionId"]
-    message = data.get("message", "Hello")
+    body  = request.get_json()
+    sid   = body["cryptoSessionId"]
+    proto = _sessions.get(sid, {}).get('proto', '??')
+    ep    = _endpoint(request.path, proto)
+    data  = _decrypt_body(sdk, body)
+    message     = data.get("message", "Hello")
     repeat_count = max(1, min(int(data.get("repeatCount", 3)), 10))
+
+    t0 = _log_req(sid, ep, data)
 
     @stream_with_context
     def generate():
         for i in range(repeat_count):
             chunk = {
-                "type": _STREAM_TYPES[i % len(_STREAM_TYPES)],
-                "content": f"{message} — chunk {i + 1} of {repeat_count}",
-                "index": i + 1,
+                "type":      _STREAM_TYPES[i % len(_STREAM_TYPES)],
+                "content":   f"{message} — chunk {i + 1} of {repeat_count}",
+                "index":     i + 1,
                 "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
             }
             enc = sdk.do_encryption([{"type": "STRING", "value": json.dumps(chunk)}], sid)
+            print(
+                f'│  {_MGN}~{_RST}  chunk {i + 1}/{repeat_count}  {_DIM}{chunk["content"][:60]}{_RST}',
+                flush=True,
+            )
             yield f"data: {json.dumps(enc)}\n\n"
             time.sleep(0.4)
+        elapsed = (time.monotonic() - t0) * 1000
+        print(
+            f'└─ {_GRN}stream done{_RST}  {_DIM}{repeat_count} chunks · {elapsed:.0f}ms{_RST}\n',
+            flush=True,
+        )
         yield "data: [DONE]\n\n"
 
     return Response(
@@ -286,12 +359,12 @@ def _make_stream(sdk):
     )
 
 
-# ─── T1 routes ────────────────────────────────────────────────────────
+# ── T1 routes ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/t1/handshake")
 def t1_handshake():
     result = t1_sdk.do_handshake(request.get_json())
-    _log(_find_latest_session("T1"), "← handshake  →  session established")
+    _session_established(_find_latest_session("T1"))
     return jsonify(result)
 
 
@@ -335,12 +408,12 @@ def t1_stream():
     return _make_stream(t1_sdk)
 
 
-# ─── T2 routes ────────────────────────────────────────────────────────
+# ── T2 routes ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/t2/handshake")
 def t2_handshake():
     result = t2_sdk.do_handshake(request.get_json())
-    _log(_find_latest_session("T2"), "← handshake  →  session established")
+    _session_established(_find_latest_session("T2"))
     return jsonify(result)
 
 
@@ -384,11 +457,12 @@ def t2_stream():
     return _make_stream(t2_sdk)
 
 
-# ─── Utility ──────────────────────────────────────────────────────────
+# ── Utility ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/users/reset")
 def reset_users():
     _seed_users()
+    print(f'{_DIM}user store reset → {len(_users)} seed users{_RST}\n', flush=True)
     return jsonify({"success": True, "message": "User store reset to seed data", "count": len(_users)})
 
 
