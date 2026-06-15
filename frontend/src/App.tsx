@@ -596,7 +596,7 @@ export default function App() {
     const encReq = await sdk.doEncryption(payloads)
     setSessionId(encReq.cryptoSessionId)
     const backendReq = JSON.parse(JSON.stringify(encReq))
-    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
+    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ type: p.type, value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -623,7 +623,7 @@ export default function App() {
     const encReq = await sdk.doEncryption(payloads)
     setSessionId(encReq.cryptoSessionId)
     const backendReq = JSON.parse(JSON.stringify(encReq))
-    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
+    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ type: p.type, value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/content/pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -651,7 +651,7 @@ export default function App() {
     const encReq = await sdk.doEncryption(payloads)
     setSessionId(encReq.cryptoSessionId)
     const backendReq = JSON.parse(JSON.stringify(encReq))
-    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
+    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ type: p.type, value: p.value }))
     const resp = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/pdfs/download`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -700,7 +700,7 @@ export default function App() {
     const encReq = await sdk.doEncryption(payloads)
     setSessionId(encReq.cryptoSessionId)
     const backendReq = JSON.parse(JSON.stringify(encReq))
-    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ value: p.value }))
+    backendReq.encPayloads = backendReq.encPayloads.map((p: any) => ({ type: p.type, value: p.value }))
     const response = await fetch(`${BACKEND}/api/${protocol.toLowerCase()}/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
