@@ -23,6 +23,8 @@ if [ ! -d frontend/node_modules ]; then
 fi
 
 # ── start services ──────────────────────────────────────────────────────
+[ -f backend/.env ] && set -a && source backend/.env && set +a
+
 source backend/venv/bin/activate
 python backend/app.py &
 BACKEND_PID=$!

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { VahanaCryptoSdk, VahanaCryptoSdkV2 } from 'vahana-crypto-sdk'
-import type { FrontendSdkConfig, Payload } from 'vahana-crypto-sdk'
+import type { FrontendSdkConfig, LogLevel, Payload } from 'vahana-crypto-sdk'
 
 type AnyVahanaSdk = VahanaCryptoSdk | VahanaCryptoSdkV2
 
 const BACKEND = 'http://localhost:8000'
 const SERVER_PUBLIC_KEY = import.meta.env.VITE_SERVER_PUBLIC_KEY?.replace(/\\n/g, '\n') ?? ''
+const SDK_LOG_LEVEL = (import.meta.env.VITE_SDK_LOG_LEVEL ?? 'info') as LogLevel
 
 const C = {
   sdk:    '#a78bfa',
@@ -571,6 +572,7 @@ export default function App() {
       publicKey: SERVER_PUBLIC_KEY,
       txnKeyName: 'txnKey',
       payloadKeyName: 'payload',
+      logLevel: SDK_LOG_LEVEL,
     }
 
     const sdk = proto === 'T2' ? new VahanaCryptoSdkV2(config) : new VahanaCryptoSdk(config)

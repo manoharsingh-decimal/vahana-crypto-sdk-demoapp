@@ -85,12 +85,13 @@ class LoggingSessionStore(InMemoryCryptoSessionStore):
         _session_open(session_id, self._proto)
 
 
-t1_sdk = VahanaCryptoSdk(SERVER_PRIV, LoggingSessionStore("T1"))
-t2_sdk = VahanaCryptoSdkV2(SERVER_PRIV, LoggingSessionStore("T2"))
+t1_sdk = VahanaCryptoSdk(SERVER_PRIV, LoggingSessionStore("T1"), log_level=_SDK_LOG_LEVEL)
+t2_sdk = VahanaCryptoSdkV2(SERVER_PRIV, LoggingSessionStore("T2"), log_level=_SDK_LOG_LEVEL)
 
 logger.info(
     f'\n{_GRN}{_BOLD}✓  Loaded server keypair — demo server ready{_RST}\n'
     f'   {_DIM}T1 (RSA per-request)  ·  T2 (AES shared session){_RST}\n'
+    f'   {_DIM}LOG_LEVEL={_LOG_LEVEL}  ·  SDK_LOG_LEVEL={_SDK_LOG_LEVEL}{_RST}\n'
 )
 
 
