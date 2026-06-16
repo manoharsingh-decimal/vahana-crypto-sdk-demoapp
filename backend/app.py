@@ -21,7 +21,12 @@ from flask_cors import CORS
 _LOG_LEVEL     = os.environ.get('LOG_LEVEL',     'INFO').upper()
 _SDK_LOG_LEVEL = os.environ.get('SDK_LOG_LEVEL', _LOG_LEVEL).upper()
 
-logging.basicConfig(level=getattr(logging, _LOG_LEVEL, logging.INFO), format='%(message)s')
+def _parse_level(name: str) -> int:
+    if name in ('NONE', 'OFF', 'SILENT'):
+        return logging.CRITICAL + 10  # above all built-in levels — silences everything
+    return getattr(logging, name, logging.INFO)
+
+logging.basicConfig(level=_parse_level(_LOG_LEVEL), format='%(message)s')
 logger = logging.getLogger('vahana')
 
 from vahana_crypto import InMemoryCryptoSessionStore, VahanaCryptoSdk, VahanaCryptoSdkV2
@@ -55,7 +60,7 @@ _MGN  = '\033[95m'
 _CYN  = '\033[96m'
 
 _sdk_logger = logging.getLogger('vahana_crypto')
-_sdk_logger.setLevel(getattr(logging, _SDK_LOG_LEVEL, logging.INFO))
+_sdk_logger.setLevel(_parse_level(_SDK_LOG_LEVEL))
 _sdk_handler = logging.StreamHandler()
 _sdk_handler.setFormatter(logging.Formatter(f'{_DIM}[sdk] %(message)s{_RST}'))
 _sdk_logger.addHandler(_sdk_handler)
