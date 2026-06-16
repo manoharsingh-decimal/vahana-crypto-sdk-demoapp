@@ -12,11 +12,15 @@ from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_cors import CORS
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
-# LOG_LEVEL=INFO  (default) → all output: handshakes, requests, responses, streams
-# LOG_LEVEL=WARNING         → silent except errors
-# LOG_LEVEL=ERROR           → errors only
+# LOG_LEVEL     — app logs (handshakes, requests, responses)  default: INFO
+# SDK_LOG_LEVEL — SDK internal logs (crypto ops, session lookups)  default: INFO
+#
+# Set to DEBUG to see internals, WARNING/ERROR to quiet down.
+# Values are read from backend/.env (sourced by start.sh) or env vars directly.
 
-_LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+_LOG_LEVEL     = os.environ.get('LOG_LEVEL',     'INFO').upper()
+_SDK_LOG_LEVEL = os.environ.get('SDK_LOG_LEVEL', _LOG_LEVEL).upper()
+
 logging.basicConfig(level=getattr(logging, _LOG_LEVEL, logging.INFO), format='%(message)s')
 logger = logging.getLogger('vahana')
 
@@ -49,6 +53,13 @@ _YLW  = '\033[93m'
 _BLU  = '\033[94m'
 _MGN  = '\033[95m'
 _CYN  = '\033[96m'
+
+_sdk_logger = logging.getLogger('vahana_crypto')
+_sdk_logger.setLevel(getattr(logging, _SDK_LOG_LEVEL, logging.INFO))
+_sdk_handler = logging.StreamHandler()
+_sdk_handler.setFormatter(logging.Formatter(f'{_DIM}[sdk] %(message)s{_RST}'))
+_sdk_logger.addHandler(_sdk_handler)
+_sdk_logger.propagate = False
 
 _PROTO_CLR = {'T1': _CYN, 'T2': _YLW}
 

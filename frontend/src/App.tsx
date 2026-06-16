@@ -8,6 +8,11 @@ const BACKEND = 'http://localhost:8000'
 const SERVER_PUBLIC_KEY = import.meta.env.VITE_SERVER_PUBLIC_KEY?.replace(/\\n/g, '\n') ?? ''
 const SDK_LOG_LEVEL = (import.meta.env.VITE_SDK_LOG_LEVEL ?? 'info') as LogLevel
 
+const LOG_RANK: Record<LogLevel, number> = {
+  trace: 0, debug: 1, info: 2, warn: 3, error: 4, none: 5,
+}
+const appLogEnabled = LOG_RANK[SDK_LOG_LEVEL] <= LOG_RANK['info']
+
 const C = {
   sdk:    '#a78bfa',
   api:    '#fbbf24',
@@ -18,6 +23,7 @@ const C = {
 } as const
 
 function sdkLog(method: string, endpoint: string, req: unknown, res: unknown) {
+  if (!appLogEnabled) return
   console.groupCollapsed(
     '%c[Vahana SDK] %c%s %s',
     `color:${C.sdk};font-weight:bold`,
@@ -578,17 +584,19 @@ export default function App() {
     const sdk = proto === 'T2' ? new VahanaCryptoSdkV2(config) : new VahanaCryptoSdk(config)
     sdkRef.current = sdk
 
-    console.groupCollapsed(
-      '%c[Vahana SDK] %cnew VahanaCryptoSdk',
-      `color:${C.sdk};font-weight:bold`,
-      `color:${C.api}`,
-    )
-    console.log('%cpublicKey',         `color:${C.dim}`, config.publicKey.slice(0, 64) + '…')
-    console.log('%cbaseUri',           `color:${C.dim}`, config.baseUri)
-    console.log('%ctxnKeyName',        `color:${C.dim}`, config.txnKeyName)
-    console.log('%chandshakeEndpoint', `color:${C.dim}`, config.handshakeEndpoint)
-    console.log('%cversion',           `color:${C.dim}`, proto)
-    console.groupEnd()
+    if (appLogEnabled) {
+      console.groupCollapsed(
+        '%c[Vahana SDK] %cnew VahanaCryptoSdk',
+        `color:${C.sdk};font-weight:bold`,
+        `color:${C.api}`,
+      )
+      console.log('%cpublicKey',         `color:${C.dim}`, config.publicKey.slice(0, 64) + '…')
+      console.log('%cbaseUri',           `color:${C.dim}`, config.baseUri)
+      console.log('%ctxnKeyName',        `color:${C.dim}`, config.txnKeyName)
+      console.log('%chandshakeEndpoint', `color:${C.dim}`, config.handshakeEndpoint)
+      console.log('%cversion',           `color:${C.dim}`, proto)
+      console.groupEnd()
+    }
   }
 
   async function callDoDecryption(encPayloads: any[], encTxnKey?: string): Promise<Payload[]> {
