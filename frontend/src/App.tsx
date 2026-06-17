@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { VahanaCryptoSdk, VahanaCryptoSdkV2 } from 'vahana-crypto-sdk'
-import type { FrontendSdkConfig, LogLevel, Payload } from 'vahana-crypto-sdk'
-
-type AnyVahanaSdk = VahanaCryptoSdk | VahanaCryptoSdkV2
+import type { LogLevel, Payload } from 'vahana-crypto-sdk'
+import {
+  VahanaCryptoContext,
+  VahanaCryptoContextV2,
+  VahanaCryptoProvider,
+  VahanaCryptoProviderV2,
+} from 'vahana-crypto-sdk-react'
 
 const BACKEND = 'http://localhost:8000'
 const SERVER_PUBLIC_KEY = import.meta.env.VITE_SERVER_PUBLIC_KEY?.replace(/\\n/g, '\n') ?? ''
@@ -37,7 +41,6 @@ function sdkLog(method: string, endpoint: string, req: unknown, res: unknown) {
 }
 
 type Protocol = 'T1' | 'T2'
-type SessionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
 interface FieldDef {
   key: string
@@ -550,65 +553,34 @@ function PdfGalleryCard({
   )
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
+// ── DemoApp — inner component, consumes Provider context ─────────────────────
 
-export default function App() {
-  const [protocol, setProtocol]   = useState<Protocol>('T1')
-  const [status, setStatus]       = useState<SessionStatus>('disconnected')
+function DemoApp({ protocol, onProtocol }: { protocol: Protocol; onProtocol: (p: Protocol) => void }) {
+  const t1ctx = useContext(VahanaCryptoContext)
+  const t2ctx = useContext(VahanaCryptoContextV2)
+  const sdk = (t1ctx?.sdk ?? t2ctx?.sdk)!
+
   const [sessionId, setSessionId] = useState('')
-  const [statusMsg, setStatusMsg] = useState('')
-  const sdkRef = useRef<AnyVahanaSdk | null>(null)
 
-  useEffect(() => { connect(protocol) }, [protocol])
+  useEffect(() => {
+    if (!appLogEnabled) return
+    console.groupCollapsed(
+      '%c[Vahana SDK] %cnew VahanaCryptoSdk',
+      `color:${C.sdk};font-weight:bold`,
+      `color:${C.api}`,
+    )
+    console.log('%cprotocol',   `color:${C.dim}`, protocol)
+    console.log('%cbaseUri',    `color:${C.dim}`, BACKEND)
+    console.log('%chandshake',  `color:${C.dim}`, `/api/${protocol.toLowerCase()}/handshake`)
+    console.groupEnd()
+  }, [])
 
-  function connect(proto: Protocol) {
-    setStatus('connected')
-    setSessionId('')
-    setStatusMsg('')
-
-    if (!SERVER_PUBLIC_KEY) {
-      setStatus('error')
-      setStatusMsg('VITE_SERVER_PUBLIC_KEY is not set. Check .env in frontend.')
-      return
-    }
-
-    const config: FrontendSdkConfig = {
-      baseUri: BACKEND,
-      handshakeEndpoint: `/api/${proto.toLowerCase()}/handshake`,
-      publicKey: SERVER_PUBLIC_KEY,
-      txnKeyName: 'txnKey',
-      payloadKeyName: 'payload',
-      logLevel: SDK_LOG_LEVEL,
-    }
-
-    const sdk = proto === 'T2' ? new VahanaCryptoSdkV2(config) : new VahanaCryptoSdk(config)
-    sdkRef.current = sdk
-
-    if (appLogEnabled) {
-      console.groupCollapsed(
-        '%c[Vahana SDK] %cnew VahanaCryptoSdk',
-        `color:${C.sdk};font-weight:bold`,
-        `color:${C.api}`,
-      )
-      console.log('%cpublicKey',         `color:${C.dim}`, config.publicKey.slice(0, 64) + '…')
-      console.log('%cbaseUri',           `color:${C.dim}`, config.baseUri)
-      console.log('%ctxnKeyName',        `color:${C.dim}`, config.txnKeyName)
-      console.log('%chandshakeEndpoint', `color:${C.dim}`, config.handshakeEndpoint)
-      console.log('%cversion',           `color:${C.dim}`, proto)
-      console.groupEnd()
-    }
-  }
-
-  async function callDoDecryption(encPayloads: any[], encTxnKey?: string): Promise<Payload[]> {
-    const sdk = sdkRef.current!
+  function callDoDecryption(encPayloads: any[], encTxnKey?: string): Promise<Payload[]> {
     if (sdk instanceof VahanaCryptoSdkV2) return sdk.doDecryption(encPayloads)
     return (sdk as VahanaCryptoSdk).doDecryption(encPayloads, encTxnKey!)
   }
 
   async function encryptedCall(endpoint: string, data: Record<string, unknown>): Promise<unknown> {
-    const sdk = sdkRef.current
-    if (!sdk) throw new Error('Not connected — wait for handshake')
-
     const payloads = [{ type: 'STRING' as const, value: JSON.stringify(data) }]
     const encReq = await sdk.doEncryption(payloads)
     setSessionId(encReq.cryptoSessionId)
@@ -629,9 +601,6 @@ export default function App() {
   }
 
   async function uploadFile(file: File): Promise<void> {
-    const sdk = sdkRef.current
-    if (!sdk) throw new Error('Not connected — wait for handshake')
-
     const arrayBuffer = await file.arrayBuffer()
     const payloads = [
       { type: 'STRING' as const, value: file.name },
@@ -661,9 +630,6 @@ export default function App() {
   }
 
   async function downloadPdf(id: string, filename: string): Promise<void> {
-    const sdk = sdkRef.current
-    if (!sdk) throw new Error('Not connected — wait for handshake')
-
     const payloads = [{ type: 'STRING' as const, value: JSON.stringify({ id }) }]
     const encReq = await sdk.doEncryption(payloads)
     setSessionId(encReq.cryptoSessionId)
@@ -685,33 +651,18 @@ export default function App() {
     sdkLog('POST', '/pdfs/download', { id }, loggedResult)
     if (!result.success) throw new Error(result.error ?? 'Download failed')
 
-    // Base64 → Uint8Array → Blob → anchor download
     const binary = atob(result.data)
     const bytes = new Uint8Array(binary.length)
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
     const blob = new Blob([bytes], { type: 'application/pdf' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    a.click()
+    a.href = url; a.download = filename; a.click()
     URL.revokeObjectURL(url)
   }
 
-  async function startStream(
-    message: string,
-    repeatCount: number,
-    onChunk: (c: StreamChunk) => void,
-  ) {
-    const sdk = sdkRef.current
-    if (!sdk) throw new Error('Not connected')
-
-    console.log(
-      '%c[Vahana SDK] %cstream →',
-      `color:${C.sdk};font-weight:bold`,
-      `color:${C.stream}`,
-      { message, repeatCount },
-    )
+  async function startStream(message: string, repeatCount: number, onChunk: (c: StreamChunk) => void) {
+    if (appLogEnabled) console.log('%c[Vahana SDK] %cstream →', `color:${C.sdk};font-weight:bold`, `color:${C.stream}`, { message, repeatCount })
 
     const payloads = [{ type: 'STRING' as const, value: JSON.stringify({ message, repeatCount }) }]
     const encReq = await sdk.doEncryption(payloads)
@@ -728,29 +679,20 @@ export default function App() {
     const reader = response.body!.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
       buffer = lines.pop() ?? ''
-
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue
         const raw = line.slice(6).trim()
         if (raw === '[DONE]') return
-
         const encChunk = JSON.parse(raw)
         const decrypted: Payload[] = await callDoDecryption(encChunk.encPayloads, encChunk.encTxnKey)
         const chunk = JSON.parse(decrypted[0].value as string) as StreamChunk
-        console.log(
-          '%c[Vahana SDK] %cstream ← #%d',
-          `color:${C.sdk};font-weight:bold`,
-          `color:${C.stream}`,
-          chunk.index,
-          chunk,
-        )
+        if (appLogEnabled) console.log('%c[Vahana SDK] %cstream ← #%d', `color:${C.sdk};font-weight:bold`, `color:${C.stream}`, chunk.index, chunk)
         onChunk(chunk)
       }
     }
@@ -759,8 +701,6 @@ export default function App() {
   async function resetUserStore() {
     try { await fetch(`${BACKEND}/api/users/reset`) } catch { /* ignore */ }
   }
-
-  const disabled = status !== 'connected'
 
   return (
     <div style={{ fontFamily: 'monospace', fontSize: 13, maxWidth: 1200, margin: '0 auto', padding: 16 }}>
@@ -775,7 +715,7 @@ export default function App() {
               {(['T1', 'T2'] as Protocol[]).map(p => (
                 <button
                   key={p}
-                  onClick={() => setProtocol(p)}
+                  onClick={() => onProtocol(p)}
                   style={{
                     marginRight: 4, padding: '2px 12px', cursor: 'pointer',
                     fontWeight: protocol === p ? 'bold' : 'normal',
@@ -789,16 +729,8 @@ export default function App() {
               ))}
             </td>
             <td style={{ textAlign: 'right', fontSize: 12 }}>
-              Status: <strong>{status}</strong>
+              Status: <strong>connected</strong>
               {sessionId && <span style={{ marginLeft: 8, color: '#555' }}>Session: {sessionId.slice(0, 8)}…</span>}
-              {status === 'error' && (
-                <button
-                  onClick={() => connect(protocol)}
-                  style={{ marginLeft: 10, cursor: 'pointer', padding: '1px 8px', fontSize: 11 }}
-                >
-                  Retry
-                </button>
-              )}
             </td>
             <td style={{ textAlign: 'right', whiteSpace: 'nowrap', paddingLeft: 16 }}>
               <button
@@ -815,12 +747,6 @@ export default function App() {
 
       <hr style={{ marginBottom: 12 }} />
 
-      {status === 'error' && statusMsg && (
-        <div style={{ border: '1px solid #c00', padding: 8, marginBottom: 12, color: '#c00', fontSize: 12 }}>
-          {statusMsg}
-        </div>
-      )}
-
       {/* API Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
         {CARDS.map(card => (
@@ -828,14 +754,43 @@ export default function App() {
             key={card.endpoint}
             {...card}
             onRun={encryptedCall}
-            disabled={disabled}
+            disabled={false}
           />
         ))}
-        <PdfUploadCard onUpload={uploadFile} disabled={disabled} />
-        <PdfGalleryCard onList={listPdfs} onDownload={downloadPdf} disabled={disabled} />
-        <StreamCard onStartStream={startStream} disabled={disabled} />
+        <PdfUploadCard onUpload={uploadFile} disabled={false} />
+        <PdfGalleryCard onList={listPdfs} onDownload={downloadPdf} disabled={false} />
+        <StreamCard onStartStream={startStream} disabled={false} />
       </div>
 
     </div>
+  )
+}
+
+// ── App — outer wrapper, mounts the appropriate Provider ─────────────────────
+
+export default function App() {
+  const [protocol, setProtocol] = useState<Protocol>('T1')
+
+  const config = {
+    baseUri: BACKEND,
+    handshakeEndpoint: `/api/${protocol.toLowerCase()}/handshake`,
+    publicKey: SERVER_PUBLIC_KEY,
+    txnKeyName: 'txnKey',
+    payloadKeyName: 'payload',
+    logLevel: SDK_LOG_LEVEL,
+  }
+
+  if (protocol === 'T2') {
+    return (
+      <VahanaCryptoProviderV2 key="T2" config={config}>
+        <DemoApp protocol={protocol} onProtocol={setProtocol} />
+      </VahanaCryptoProviderV2>
+    )
+  }
+
+  return (
+    <VahanaCryptoProvider key="T1" config={config}>
+      <DemoApp protocol={protocol} onProtocol={setProtocol} />
+    </VahanaCryptoProvider>
   )
 }
