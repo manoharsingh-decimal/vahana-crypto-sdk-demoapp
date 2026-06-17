@@ -132,12 +132,6 @@ def _session_established(session_id: str) -> None:
     )
 
 
-def _find_latest_session(proto: str) -> str:
-    for sid in reversed(list(_sessions.keys())):
-        if _sessions[sid]['proto'] == proto:
-            return sid
-    return ''
-
 
 # ── Request / response logging ────────────────────────────────────────────────
 
@@ -390,7 +384,7 @@ def _make_stream(sdk):
 @app.post("/api/t1/handshake")
 def t1_handshake():
     result = t1_sdk.do_handshake(request.get_json())
-    _session_established(_find_latest_session("T1"))
+    _session_established(result["cryptoSessionId"])
     return jsonify(result)
 
 
@@ -439,7 +433,7 @@ def t1_stream():
 @app.post("/api/t2/handshake")
 def t2_handshake():
     result = t2_sdk.do_handshake(request.get_json())
-    _session_established(_find_latest_session("T2"))
+    _session_established(result["cryptoSessionId"])
     return jsonify(result)
 
 
