@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: vahana-crypto-demoapp-backend
+Version: 0.1.0
+Requires-Python: >=3.10
+Requires-Dist: flask>=3.0.0
+Requires-Dist: flask-cors>=4.0.0
+Requires-Dist: vahana-crypto==0.1.0

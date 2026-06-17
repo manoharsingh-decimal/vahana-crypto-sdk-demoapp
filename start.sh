@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 if [ ! -d backend/venv ]; then
   echo "Creating backend virtualenv..."
   python3 -m venv backend/venv
-  backend/venv/bin/pip install -r backend/requirements.txt
+  backend/venv/bin/pip install --find-links ./vendor ./backend
 fi
 
 # Generate keypair if needed.

@@ -95,9 +95,11 @@ class LoggingSessionStore(InMemoryCryptoSessionStore):
     def __init__(self, proto: str):
         super().__init__()
         self._proto = proto
+        self._last_sid: str | None = None
 
     def set(self, session_id: str, data: dict) -> None:
         super().set(session_id, data)
+        self._last_sid = session_id
         _session_open(session_id, self._proto)
 
 
@@ -384,7 +386,7 @@ def _make_stream(sdk):
 @app.post("/api/t1/handshake")
 def t1_handshake():
     result = t1_sdk.do_handshake(request.get_json())
-    _session_established(result["cryptoSessionId"])
+    _session_established(t1_sdk._store._last_sid)
     return jsonify(result)
 
 
@@ -433,7 +435,7 @@ def t1_stream():
 @app.post("/api/t2/handshake")
 def t2_handshake():
     result = t2_sdk.do_handshake(request.get_json())
-    _session_established(result["cryptoSessionId"])
+    _session_established(t2_sdk._store._last_sid)
     return jsonify(result)
 
 
